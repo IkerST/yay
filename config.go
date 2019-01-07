@@ -148,7 +148,7 @@ func defaultSettings() *Configuration {
 		MakepkgBin:         "makepkg",
 		MakepkgConf:        "",
 		NoConfirm:          false,
-		PacmanBin:          "pacman",
+		PacmanBin:          "powerpill",
 		PGPFetch:           true,
 		PacmanConf:         "/etc/pacman.conf",
 		GpgFlags:           "",
