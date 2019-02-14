@@ -9,9 +9,9 @@ import (
 	"unsafe"
 )
 
-// FindSatisfier searches a DbList for a package that satisfies depstring
+// FindSatisfier searches a DBList for a package that satisfies depstring
 // Example "glibc>=2.12"
-func (l DbList) FindSatisfier(depstring string) (*Package, error) {
+func (l DBList) FindSatisfier(depstring string) (*Package, error) {
 	cDepString := C.CString(depstring)
 	defer C.free(unsafe.Pointer(cDepString))
 
@@ -21,7 +21,7 @@ func (l DbList) FindSatisfier(depstring string) (*Package, error) {
 	ptr := C.alpm_find_dbs_satisfier(pkgHandle, pkgList, cDepString)
 	if ptr == nil {
 		return nil,
-			fmt.Errorf("unable to satisfy dependency %s in Dblist", depstring)
+			fmt.Errorf("unable to satisfy dependency %s in DBlist", depstring)
 	}
 
 	return &Package{ptr, l.handle}, nil

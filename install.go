@@ -17,6 +17,7 @@ import (
 func install(parser *arguments) error {
 	var err error
 	var incompatible stringSet
+	var do *depOrder
 
 	var aurUp upSlice
 	var repoUp upSlice
@@ -109,17 +110,17 @@ func install(parser *arguments) error {
 
 	targets := sliceToStringSet(parser.targets)
 
-	ds, err := getDepSolver(requestTargets, warnings)
+	dp, err := getDepPool(requestTargets, warnings)
 	if err != nil {
 		return err
 	}
 
-	err = ds.CheckMissing()
+	err = dp.CheckMissing()
 	if err != nil {
 		return err
 	}
 
-	if len(ds.Aur) == 0 {
+	if len(dp.Aur) == 0 {
 		if !config.CombinedUpgrade {
 			if parser.existsArg("u", "sysupgrade") {
 				fmt.Println(" there is nothing to do")
@@ -133,32 +134,37 @@ func install(parser *arguments) error {
 		return show(passToPacman(parser))
 	}
 
-	if len(ds.Aur) > 0 && 0 == os.Geteuid() {
+	if len(dp.Aur) > 0 && 0 == os.Geteuid() {
 		return fmt.Errorf(bold(red(arrow)) + " Refusing to install AUR Packages as root, Aborting.")
 	}
 
-	conflicts, err := ds.CheckConflicts()
+	conflicts, err := dp.CheckConflicts()
 	if err != nil {
 		return err
 	}
 
-	for _, pkg := range ds.Repo {
+	do = getDepOrder(dp)
+	if err != nil {
+		return err
+	}
+
+	for _, pkg := range do.Repo {
 		arguments.addTarget(pkg.DB().Name() + "/" + pkg.Name())
 	}
 
-	for _, pkg := range ds.Groups {
+	for _, pkg := range dp.Groups {
 		arguments.addTarget(pkg)
 	}
 
-	if len(ds.Aur) == 0 && len(arguments.targets) == 0 && (!parser.existsArg("u", "sysupgrade") || mode == modeAUR) {
+	if len(do.Aur) == 0 && len(arguments.targets) == 0 && (!parser.existsArg("u", "sysupgrade") || mode == modeAUR) {
 		fmt.Println(" there is nothing to do")
 		return nil
 	}
 
-	ds.Print()
+	do.Print()
 	fmt.Println()
 
-	if ds.HasMake() {
+	if do.HasMake() {
 		if config.RemoveMake == "yes" {
 			removeMake = true
 		} else if config.RemoveMake == "no" {
@@ -169,9 +175,9 @@ func install(parser *arguments) error {
 	}
 
 	if config.CleanMenu {
-		if anyExistInCache(ds.Aur) {
-			askClean := pkgbuildNumberMenu(ds.Aur, remoteNamesCache)
-			toClean, err := cleanNumberMenu(ds.Aur, remoteNamesCache, askClean)
+		if anyExistInCache(do.Aur) {
+			askClean := pkgbuildNumberMenu(do.Aur, remoteNamesCache)
+			toClean, err := cleanNumberMenu(do.Aur, remoteNamesCache, askClean)
 			if err != nil {
 				return err
 			}
@@ -180,8 +186,8 @@ func install(parser *arguments) error {
 		}
 	}
 
-	toSkip := pkgbuildsToSkip(ds.Aur, targets)
-	cloned, err := downloadPkgbuilds(ds.Aur, toSkip, config.BuildDir)
+	toSkip := pkgbuildsToSkip(do.Aur, targets)
+	cloned, err := downloadPkgbuilds(do.Aur, toSkip, config.BuildDir)
 	if err != nil {
 		return err
 	}
@@ -190,8 +196,8 @@ func install(parser *arguments) error {
 	var toEdit []Base
 
 	if config.DiffMenu {
-		pkgbuildNumberMenu(ds.Aur, remoteNamesCache)
-		toDiff, err = diffNumberMenu(ds.Aur, remoteNamesCache)
+		pkgbuildNumberMenu(do.Aur, remoteNamesCache)
+		toDiff, err = diffNumberMenu(do.Aur, remoteNamesCache)
 		if err != nil {
 			return err
 		}
@@ -214,19 +220,19 @@ func install(parser *arguments) error {
 		config.NoConfirm = oldValue
 	}
 
-	err = mergePkgbuilds(ds.Aur)
+	err = mergePkgbuilds(do.Aur)
 	if err != nil {
 		return err
 	}
 
-	srcinfos, err = parseSrcinfoFiles(ds.Aur, true)
+	srcinfos, err = parseSrcinfoFiles(do.Aur, true)
 	if err != nil {
 		return err
 	}
 
 	if config.EditMenu {
-		pkgbuildNumberMenu(ds.Aur, remoteNamesCache)
-		toEdit, err = editNumberMenu(ds.Aur, remoteNamesCache)
+		pkgbuildNumberMenu(do.Aur, remoteNamesCache)
+		toEdit, err = editNumberMenu(do.Aur, remoteNamesCache)
 		if err != nil {
 			return err
 		}
@@ -249,13 +255,13 @@ func install(parser *arguments) error {
 		config.NoConfirm = oldValue
 	}
 
-	incompatible, err = getIncompatible(ds.Aur, srcinfos)
+	incompatible, err = getIncompatible(do.Aur, srcinfos)
 	if err != nil {
 		return err
 	}
 
 	if config.PGPFetch {
-		err = checkPgpKeys(ds.Aur, srcinfos)
+		err = checkPgpKeys(do.Aur, srcinfos)
 		if err != nil {
 			return err
 		}
@@ -276,15 +282,15 @@ func install(parser *arguments) error {
 		expArguments := makeArguments()
 		expArguments.addArg("D", "asexplicit")
 
-		for _, pkg := range ds.Repo {
-			if !ds.Explicit.get(pkg.Name()) && !localNamesCache.get(pkg.Name()) && !remoteNamesCache.get(pkg.Name()) {
+		for _, pkg := range do.Repo {
+			if !dp.Explicit.get(pkg.Name()) && !localNamesCache.get(pkg.Name()) && !remoteNamesCache.get(pkg.Name()) {
 				depArguments.addTarget(pkg.Name())
 				continue
 			}
 
-			if parser.existsArg("asdeps", "asdep") && ds.Explicit.get(pkg.Name()) {
+			if parser.existsArg("asdeps", "asdep") && dp.Explicit.get(pkg.Name()) {
 				depArguments.addTarget(pkg.Name())
-			} else if parser.existsArg("asexp", "asexplicit") && ds.Explicit.get(pkg.Name()) {
+			} else if parser.existsArg("asexp", "asexplicit") && dp.Explicit.get(pkg.Name()) {
 				expArguments.addTarget(pkg.Name())
 			}
 		}
@@ -306,12 +312,12 @@ func install(parser *arguments) error {
 
 	go updateCompletion(false)
 
-	err = downloadPkgbuildsSources(ds.Aur, incompatible)
+	err = downloadPkgbuildsSources(do.Aur, incompatible)
 	if err != nil {
 		return err
 	}
 
-	err = buildInstallPkgbuilds(ds, srcinfos, parser, incompatible, conflicts)
+	err = buildInstallPkgbuilds(dp, do, srcinfos, parser, incompatible, conflicts)
 	if err != nil {
 		return err
 	}
@@ -320,7 +326,7 @@ func install(parser *arguments) error {
 		removeArguments := makeArguments()
 		removeArguments.addArg("R", "u")
 
-		for _, pkg := range ds.getMake() {
+		for _, pkg := range do.getMake() {
 			removeArguments.addTarget(pkg)
 		}
 
@@ -335,30 +341,30 @@ func install(parser *arguments) error {
 	}
 
 	if config.CleanAfter {
-		cleanAfter(ds.Aur)
+		cleanAfter(do.Aur)
 	}
 
 	return nil
 }
 
-func inRepos(syncDb alpm.DbList, pkg string) bool {
+func inRepos(syncDB alpm.DBList, pkg string) bool {
 	target := toTarget(pkg)
 
-	if target.Db == "aur" {
+	if target.DB == "aur" {
 		return false
-	} else if target.Db != "" {
+	} else if target.DB != "" {
 		return true
 	}
 
 	previousHideMenus := hideMenus
 	hideMenus = false
-	_, err := syncDb.FindSatisfier(target.DepString())
+	_, err := syncDB.FindSatisfier(target.DepString())
 	hideMenus = previousHideMenus
 	if err == nil {
 		return true
 	}
 
-	_, err = syncDb.PkgCachebyGroup(target.Name)
+	_, err = syncDB.FindGroupPkgs(target.Name)
 	if err == nil {
 		return true
 	}
@@ -373,7 +379,7 @@ func earlyPacmanCall(parser *arguments) error {
 	parser.clearTargets()
 	arguments.clearTargets()
 
-	syncDb, err := alpmHandle.SyncDbs()
+	syncDB, err := alpmHandle.SyncDBs()
 	if err != nil {
 		return err
 	}
@@ -383,7 +389,7 @@ func earlyPacmanCall(parser *arguments) error {
 	} else {
 		//separate aur and repo targets
 		for _, target := range targets {
-			if inRepos(syncDb, target) {
+			if inRepos(syncDB, target) {
 				arguments.addTarget(target)
 			} else {
 				parser.addTarget(target)
@@ -894,8 +900,8 @@ func downloadPkgbuildsSources(bases []Base, incompatible stringSet) (err error) 
 	return
 }
 
-func buildInstallPkgbuilds(ds *depSolver, srcinfos map[string]*gosrc.Srcinfo, parser *arguments, incompatible stringSet, conflicts mapStringSet) error {
-	for _, base := range ds.Aur {
+func buildInstallPkgbuilds(dp *depPool, do *depOrder, srcinfos map[string]*gosrc.Srcinfo, parser *arguments, incompatible stringSet, conflicts mapStringSet) error {
+	for _, base := range do.Aur {
 		pkg := base.Pkgbase()
 		dir := filepath.Join(config.BuildDir, pkg)
 		built := true
@@ -921,7 +927,7 @@ func buildInstallPkgbuilds(ds *depSolver, srcinfos map[string]*gosrc.Srcinfo, pa
 
 		isExplicit := false
 		for _, b := range base {
-			isExplicit = isExplicit || ds.Explicit.get(b.Name)
+			isExplicit = isExplicit || dp.Explicit.get(b.Name)
 		}
 		if config.ReBuild == "no" || (config.ReBuild == "yes" && !isExplicit) {
 			for _, split := range base {
@@ -944,7 +950,7 @@ func buildInstallPkgbuilds(ds *depSolver, srcinfos map[string]*gosrc.Srcinfo, pa
 		if cmdArgs.existsArg("needed") {
 			installed := true
 			for _, split := range base {
-				if alpmpkg, err := ds.LocalDb.PkgByName(split.Name); err != nil || alpmpkg.Version() != version {
+				if alpmpkg, err := dp.LocalDB.Pkg(split.Name); err != nil || alpmpkg.Version() != version {
 					installed = false
 				}
 			}
@@ -1028,11 +1034,11 @@ func buildInstallPkgbuilds(ds *depSolver, srcinfos map[string]*gosrc.Srcinfo, pa
 			}
 
 			arguments.addTarget(pkgdest)
-			if !ds.Explicit.get(split.Name) && !localNamesCache.get(split.Name) && !remoteNamesCache.get(split.Name) {
+			if !dp.Explicit.get(split.Name) && !localNamesCache.get(split.Name) && !remoteNamesCache.get(split.Name) {
 				depArguments.addTarget(split.Name)
 			}
 
-			if ds.Explicit.get(split.Name) {
+			if dp.Explicit.get(split.Name) {
 				if parser.existsArg("asdeps", "asdep") {
 					depArguments.addTarget(split.Name)
 				} else if parser.existsArg("asexplicit", "asexp") {

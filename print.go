@@ -60,7 +60,7 @@ func human(size int64) string {
 
 // PrintSearch handles printing search results in a given format
 func (q aurQuery) printSearch(start int) {
-	localDb, _ := alpmHandle.LocalDb()
+	localDB, _ := alpmHandle.LocalDB()
 
 	for i, res := range q {
 		var toprint string
@@ -88,7 +88,7 @@ func (q aurQuery) printSearch(start int) {
 			toprint += bold(red("(Out-of-date "+formatTime(res.OutOfDate)+")")) + " "
 		}
 
-		if pkg, err := localDb.PkgByName(res.Name); err == nil {
+		if pkg, err := localDB.Pkg(res.Name); err == nil {
 			if pkg.Version() != res.Version {
 				toprint += bold(green("(Installed: " + pkg.Version() + ")"))
 			} else {
@@ -124,9 +124,9 @@ func (s repoQuery) printSearch() {
 			toprint += fmt.Sprint(res.Groups().Slice(), " ")
 		}
 
-		localDb, err := alpmHandle.LocalDb()
+		localDB, err := alpmHandle.LocalDB()
 		if err == nil {
-			if pkg, err := localDb.PkgByName(res.Name()); err == nil {
+			if pkg, err := localDB.Pkg(res.Name()); err == nil {
 				if pkg.Version() != res.Version() {
 					toprint += bold(green("(Installed: " + pkg.Version() + ")"))
 				} else {
@@ -189,6 +189,76 @@ func (u upSlice) print() {
 	}
 }
 
+// printDownloadsFromRepo prints repository packages to be downloaded
+func (do *depOrder) Print() {
+	repo := ""
+	repoMake := ""
+	aur := ""
+	aurMake := ""
+
+	repoLen := 0
+	repoMakeLen := 0
+	aurLen := 0
+	aurMakeLen := 0
+
+	for _, pkg := range do.Repo {
+		if do.Runtime.get(pkg.Name()) {
+			repo += "  " + pkg.Name() + "-" + pkg.Version()
+			repoLen++
+		} else {
+			repoMake += "  " + pkg.Name() + "-" + pkg.Version()
+			repoMakeLen++
+		}
+	}
+
+	for _, base := range do.Aur {
+		pkg := base.Pkgbase()
+		pkgStr := "  " + pkg + "-" + base[0].Version
+		pkgStrMake := pkgStr
+
+		push := false
+		pushMake := false
+
+		if len(base) > 1 || pkg != base[0].Name {
+			pkgStr += " ("
+			pkgStrMake += " ("
+
+			for _, split := range base {
+				if do.Runtime.get(split.Name) {
+					pkgStr += split.Name + " "
+					aurLen++
+					push = true
+				} else {
+					pkgStrMake += split.Name + " "
+					aurMakeLen++
+					pushMake = true
+				}
+			}
+
+			pkgStr = pkgStr[:len(pkgStr)-1] + ")"
+			pkgStrMake = pkgStrMake[:len(pkgStrMake)-1] + ")"
+		} else if do.Runtime.get(base[0].Name) {
+			aurLen++
+			push = true
+		} else {
+			aurMakeLen++
+			pushMake = true
+		}
+
+		if push {
+			aur += pkgStr
+		}
+		if pushMake {
+			aurMake += pkgStrMake
+		}
+	}
+
+	printDownloads("Repo", repoLen, repo)
+	printDownloads("Repo Make", repoMakeLen, repoMake)
+	printDownloads("Aur", aurLen, aur)
+	printDownloads("Aur Make", aurMakeLen, aurMake)
+}
+
 func printDownloads(repoName string, length int, packages string) {
 	if length < 1 {
 		return
@@ -248,12 +318,12 @@ func PrintInfo(a *rpc.Pkg) {
 
 // BiggestPackages prints the name of the ten biggest packages in the system.
 func biggestPackages() {
-	localDb, err := alpmHandle.LocalDb()
+	localDB, err := alpmHandle.LocalDB()
 	if err != nil {
 		return
 	}
 
-	pkgCache := localDb.PkgCache()
+	pkgCache := localDB.PkgCache()
 	pkgS := pkgCache.SortBySize().Slice()
 
 	if len(pkgS) < 10 {
